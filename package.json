@@ -1,0 +1,19 @@
+{
+  "name": "key-manager",
+  "version": "1.0.0",
+  "description": "tan",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.8.3",
+    "cors": "^2.8.5",
+    "crypto-js": "^4.2.0",
+    "express": "^4.21.2",
+    "key-manager": "file:",
+    "mongoose": "^8.12.1"
+  }
+}
