@@ -28,6 +28,7 @@ const pinata = new pinataSDK({
 
 const provider = new ethers.providers.JsonRpcProvider(process.env.RPC_URL);
 const wallet_admin = new ethers.Wallet(process.env.PRIVATE_KEY_ADMIN, provider);
+
 // const wallet_doctor = new ethers.Wallet(
 //     process.env.PRIVATE_KEY_DOCTOR,
 //     provider
@@ -45,6 +46,7 @@ const contract = new ethers.Contract(
 // 1. Tạo bệnh án mới
 
 app.post("/api/medical-record", async (req, res) => {
+    console.log("tao moi");
     try {
         const {
             patient_address,
@@ -66,7 +68,11 @@ app.post("/api/medical-record", async (req, res) => {
             !orderId ||
             !patientName
         ) {
-            return res.status(400).json({ error: "Thiếu dữ liệu bắt buộc" });
+            return res.status(400).json({
+                code: 400,
+                message: "Thiếu dữ liệu bắt buộc",
+                data: {},
+            });
         }
 
         // B1: Tạo object chứa bệnh án
@@ -237,6 +243,7 @@ app.get("/api/data-raw/get-from-order-table-id/:orderId", async (req, res) => {
 
 // cấp quyền doctor
 app.post("/grant/doctor", async (req, res) => {
+    console.log("cap quyen");
     const { doctorAddress } = req.body;
 
     try {
@@ -329,7 +336,7 @@ app.post("/check-roles-of", async (req, res) => {
     }
 });
 
-// 2. Cập nhật bệnh án theo recordId
+// 2. Cập nhật bệnh án theo recordId và chỉ doctor tạo mới cập nhật đc
 app.put("/api/medical-record/:recordId", async (req, res) => {
     try {
         const recordId = parseInt(req.params.recordId);
@@ -369,42 +376,195 @@ app.put("/api/medical-record/:recordId", async (req, res) => {
     }
 });
 
-// 3. Cập nhật bệnh án theo orderId
-app.put("/api/medical-record/order/:orderId", async (req, res) => {
+app.put("/api/update-medical-record/:orderId", async (req, res) => {
     try {
         const orderId = req.params.orderId;
-        const { newData } = req.body;
-
-        if (!newData) {
+        if (orderId == null)
             return res.status(400).json({
                 code: 400,
-                message: "Thiếu dữ liệu khi update bằng orderId !! ",
-                result: {},
+                message: "OrderId not null",
+                data: {},
+            });
+        const {
+            patient_address,
+            doctor_address,
+            encrypted_doctor_key,
+            patientName,
+            age,
+            gender,
+            diagnosis,
+            treatment,
+            prescription,
+        } = req.body;
+
+        if (!encrypted_doctor_key || !orderId || !patientName) {
+            return res.status(400).json({
+                code: 400,
+                message: "Thiếu dữ liệu bắt buộc",
+                data: {},
             });
         }
 
-        const result = await pinata.pinJSONToIPFS(newData);
+        // B1: Tạo object chứa bệnh án
+        const medicalRecordData = {
+            patientName,
+            age,
+            gender,
+            diagnosis,
+            treatment,
+            prescription,
+        };
+
+        // B2: Mã hóa bệnh án
+        const plainText = JSON.stringify(medicalRecordData);
+        const encryptedText = await encryptKey(plainText);
+
+        // B3: Đưa chuỗi đã mã hóa lên IPFS
+        const result = await pinata.pinJSONToIPFS({
+            encryptedData: encryptedText,
+        });
         const newIpfsHash = result.IpfsHash;
 
-        const tx = await contract.updateByOrderTableId(orderId, newIpfsHash);
-        const receipt = await tx.wait();
+        // giải mã key của doctor
+        const decryptedPrivateKeyDoctor = await decryptKey(
+            encrypted_doctor_key
+        );
+        const wallet_doctor = new ethers.Wallet(
+            decryptedPrivateKeyDoctor,
+            provider
+        );
 
+        // B4: Gọi smart contract để lưu IPFS hash
+        const contract1 = new ethers.Contract(
+            contractAddress,
+            contractABI.abi,
+            wallet_doctor
+        );
+
+        console.log(orderId, newIpfsHash);
+        try {
+            const estimatedGas =
+                await contract1.estimateGas.updateRecordByOrderId(
+                    orderId,
+                    newIpfsHash
+                );
+            const tx = await contract1.updateRecordByOrderId(
+                orderId,
+                newIpfsHash,
+                {
+                    gasLimit: 10000000,
+                }
+            );
+            const receipt = await tx.wait();
+            console.log("Giao dịch thành công:", receipt);
+        } catch (error) {
+            console.error("Lỗi khi gọi contract:", error);
+        }
+
+        // B5: Trả kết quả về client
         res.json({
             code: 200,
-            message: "Cập nhật theo orderId thành công",
-            result: {
-                txHash: receipt.transactionHash,
-                ipfsHash: newIpfsHash,
-            },
+            message: "Tạo bệnh án thành công",
+            result: {},
         });
     } catch (error) {
         console.error(error);
         res.status(500).json({
-            code: 400,
-            message: "Lỗi server khi cập nhật bằng orderId ",
-            result: {},
+            code: 401,
+            message: "Doctor not Authorize",
+            result: {
+                error: error.reason || "Lỗi server",
+            },
         });
     }
+});
+app.put("/api/update-medical-record-test/:orderId", async (req, res) => {
+    const orderId = req.params.orderId;
+    if (orderId == null)
+        return res.status(400).json({
+            code: 400,
+            message: "OrderId not null",
+            data: {},
+        });
+
+    const {
+        patient_address,
+        doctor_address,
+        encrypted_doctor_key,
+        patientName,
+        age,
+        gender,
+        diagnosis,
+        treatment,
+        prescription,
+    } = req.body;
+
+    if (!encrypted_doctor_key || !orderId || !patientName) {
+        return res.status(400).json({
+            code: 400,
+            message: "Thiếu dữ liệu bắt buộc",
+            data: {},
+        });
+    }
+
+    const medicalRecordData = {
+        patientName,
+        age,
+        gender,
+        diagnosis,
+        treatment,
+        prescription,
+    };
+
+    const plainText = JSON.stringify(medicalRecordData);
+    const encryptedText = await encryptKey(plainText);
+
+    const result = await pinata.pinJSONToIPFS({
+        encryptedData: encryptedText,
+    });
+    const newIpfsHash = result.IpfsHash;
+
+    const decryptedPrivateKeyDoctor = await decryptKey(encrypted_doctor_key);
+    const wallet_doctor = new ethers.Wallet(
+        decryptedPrivateKeyDoctor,
+        provider
+    );
+
+    const contract1 = new ethers.Contract(
+        contractAddress,
+        contractABI.abi,
+        wallet_doctor
+    );
+
+    const status = await contract1.callStatic.updateRecordByOrderIdFix(
+        orderId,
+        newIpfsHash
+    );
+
+    const UpdateStatus = [
+        "Success",
+        "OrderIdNotFound",
+        "RecordNotFound",
+        "NotAuthorized",
+        "RecordNotInPatientList",
+    ];
+
+    if (status.toString() !== "0") {
+        return res.status(400).json({
+            code: 400,
+            status: UpdateStatus[status],
+            message: "Không thể cập nhật bệnh án",
+        });
+    }
+
+    // ✅ Bây giờ mới gọi thật
+    const tx = await contract1.updateRecordByOrderIdFix(orderId, newIpfsHash);
+    await tx.wait();
+
+    res.json({
+        code: 200,
+        message: "Cập nhật thành công",
+    });
 });
 
 // 4. Lấy chi tiết bệnh án theo orderId
@@ -443,6 +603,13 @@ app.get("/api/medical-record/:recordId", async (req, res) => {
     try {
         const recordId = parseInt(req.params.recordId);
 
+        if (recordId == null) {
+            res.status(500).json({
+                code: 400,
+                message: "Id không đúng định dạng !!",
+                result: {},
+            });
+        }
         const record = await contract.getRecord(recordId);
 
         res.json({
@@ -463,18 +630,38 @@ app.get("/api/medical-record/:recordId", async (req, res) => {
         console.error(error);
         res.status(500).json({
             code: 500,
-            message: "Lỗi server",
+            message: "Không tồn tại id này !!",
             result: {},
         });
     }
 });
 
 // 6. Lấy tất cả bệnh án của 1 bệnh nhân
-app.get("/api/medical-record/patient/:patientAddress", async (req, res) => {
+app.post("/api/medical-record/patient", async (req, res) => {
     try {
-        const patientAddress = req.params.patientAddress;
+        const { address, encrypted_key } = req.body;
+        if (!address || !encrypted_key) {
+            return res.status(400).json({
+                code: 400,
+                message: "Thiếu dữ liệu bắt buộc",
+                data: {},
+            });
+        }
 
-        const records = await contract.getAllRecordsOfPatient(patientAddress);
+        // giải mã key
+        const decryptedPrivateKeyRaw = await decryptKey(encrypted_key);
+        const walletBlockchain = new ethers.Wallet(
+            decryptedPrivateKeyRaw,
+            provider
+        );
+
+        const contract1 = new ethers.Contract(
+            contractAddress,
+            contractABI.abi,
+            walletBlockchain
+        );
+
+        const records = await contract1.getAllRecordsOfPatient(address);
 
         res.json({
             code: 200,
@@ -517,55 +704,235 @@ app.get("/api/medical-record/creator/:creatorAddress", async (req, res) => {
     }
 });
 
-// API lấy danh sách recordId của bác sĩ theo địa chỉ truyền vào param
-app.get("/records/doctor/:address", async (req, res) => {
-    const doctorAddress = req.params.address;
-
+//8 API lấy danh sách recordId của bác sĩ
+app.post("/records/doctor", async (req, res) => {
     try {
-        // Gọi hàm getRecordsCreatedByDoctor
-        const recordIds = await contract.getRecordsCreatedByDoctor(
-            doctorAddress
+        const { address, encrypted_key } = req.body;
+        if (!address || !encrypted_key) {
+            return res.status(400).json({
+                code: 400,
+                message: "Thiếu dữ liệu bắt buộc",
+                data: {},
+            });
+        }
+
+        // giải mã key
+        const decryptedPrivateKeyRaw = await decryptKey(encrypted_key);
+        const walletBlockchain = new ethers.Wallet(
+            decryptedPrivateKeyRaw,
+            provider
         );
 
-        res.json({
-            code: 200,
-            message: "Lấy danh sách recordId của bác sĩ theo địa chỉ ",
-            result: {
-                doctor: doctorAddress,
-                recordIds,
-            },
-        });
-    } catch (error) {
-        res.status(500).json({
-            code: 500,
-            message: "Lỗi server khi lấy danh sách !! ",
-            result: {},
-        });
-    }
-});
+        const contract1 = new ethers.Contract(
+            contractAddress,
+            contractABI.abi,
+            walletBlockchain
+        );
 
-// 8. Lấy tất cả recordId
-app.get("/api/medical-record/all-record-ids", async (req, res) => {
-    try {
-        const allRecordIds = await contract.getAllRecordIds();
-
-        console.log(allRecordIds);
-        // Chuyển BigNumber -> string
-        const recordIds = allRecordIds.map((id) => id.toString());
+        const records = await contract1.getRecordsCreatedByDoctor(address);
 
         res.json({
             code: 200,
-            message: "Lấy tất cả recordId thành công",
+            message: "Lấy danh sách recordId của bác sĩ theo địa chỉ !!",
             result: {
-                recordIds,
+                records,
             },
         });
     } catch (error) {
         console.error(error);
         res.status(500).json({
             code: 500,
-            message: "Lỗi xử lí trong blockchain",
+            message: "Thông tin sai hoặc bạn không có quyền gọi endpoint này!!",
             result: {},
+        });
+    }
+});
+
+// 8. Lấy tất cả recordId
+app.get("/api/admin/getAllRecord", async (req, res) => {
+    try {
+        const { encrypted_key } = req.body;
+        if (!encrypted_key) {
+            return res.status(400).json({
+                code: 400,
+                message: "Thiếu dữ liệu bắt buộc",
+                data: {},
+            });
+        }
+
+        // giải mã key
+        const decryptedPrivateKeyRaw = await decryptKey(encrypted_key);
+        const walletBlockchain = new ethers.Wallet(
+            decryptedPrivateKeyRaw,
+            provider
+        );
+
+        const contract1 = new ethers.Contract(
+            contractAddress,
+            contractABI.abi,
+            walletBlockchain
+        );
+
+        const records = await contract1.getAllRecordIds();
+
+        res.json({
+            code: 200,
+            message: "Lấy danh sách record bệnh án thành công !!",
+            result: {
+                records,
+            },
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({
+            code: 500,
+            message: "Chỉ có admin có quyền gọi endpoint này !!",
+            result: {},
+        });
+    }
+});
+
+// Private key của ví trong Ganache (ví có sẵn ETH)
+const senderPrivateKey = process.env.PRIVATE_KEY_WALLET_PRICE; // thay bằng private key thật
+const senderWallet = new ethers.Wallet(senderPrivateKey, provider);
+
+// Tạo ví mới
+app.get("/create-wallet", async (req, res) => {
+    try {
+        const wallet = ethers.Wallet.createRandom();
+        const encryptedPrivateKey = await encryptKey(wallet.privateKey);
+        res.json({
+            code: 200,
+            message: "Tạo ví thành công !!",
+            result: {
+                address: wallet.address,
+                privateKey: encryptedPrivateKey,
+            },
+        });
+    } catch (error) {
+        res.status(500).json({
+            code: 500,
+            message: "Tạo ví thất bại",
+            result: {
+                details: error.message,
+            },
+        });
+    }
+});
+
+// Chuyển ETH sang ví mới
+app.post("/fund-wallet", async (req, res) => {
+    const { toAddress, amount } = req.body;
+
+    if (!toAddress || !amount) {
+        return res.status(400).json({
+            code: 400,
+            message: "Vui lòng truyền 'toAddress' và 'amount !!",
+            result: {},
+        });
+    }
+
+    try {
+        const tx = await senderWallet.sendTransaction({
+            to: toAddress,
+            value: ethers.utils.parseEther(amount), // chuyển từ ETH sang wei
+        });
+
+        await tx.wait();
+
+        res.json({
+            code: 200,
+            message: "Chuyển ETH thành công!",
+            result: {
+                transactionHash: tx.hash,
+            },
+        });
+    } catch (error) {
+        console.error("Lỗi chuyển ETH:", error);
+        res.status(500).json({
+            code: 500,
+            message: "Chuyển ETH thất bại !!",
+            result: {
+                details: error.message,
+            },
+        });
+    }
+});
+
+// tạo và cấp tiền cho ví thông qua role
+app.post("/create-and-fund-wallet", async (req, res) => {
+    const { role } = req.body;
+
+    if (!role || (role !== "DOCTOR" && role !== "USER")) {
+        return res.status(400).json({
+            code: 400,
+            message:
+                "Vui lòng truyền 'role' và giá trị là 'doctor' hoặc 'user'!",
+            result: {},
+        });
+    }
+
+    try {
+        // Tạo ví mới
+        const wallet = ethers.Wallet.createRandom();
+        const encryptedPrivateKey = await encryptKey(wallet.privateKey);
+
+        // Xác định số ETH cần cấp
+        let amount = "0.5";
+        if (role === "doctor") amount = "2";
+
+        // Chuyển ETH từ ví senderWallet sang ví mới tạo
+        const tx = await senderWallet.sendTransaction({
+            to: wallet.address,
+            value: ethers.utils.parseEther(amount),
+        });
+        await tx.wait();
+
+        // Trả kết quả
+        res.json({
+            code: 200,
+            message: `Tạo ví và chuyển ${amount} ETH thành công!`,
+            result: {
+                address: wallet.address,
+                privateKey: encryptedPrivateKey,
+                transactionHash: tx.hash,
+            },
+        });
+    } catch (error) {
+        console.error("Lỗi tạo và chuyển ETH:", error);
+        res.status(500).json({
+            code: 500,
+            message: "Tạo ví và chuyển ETH thất bại!",
+            result: {
+                details: error.message,
+            },
+        });
+    }
+});
+
+// Kiểm tra số dư của địa chỉ ví
+app.get("/balance/:address", async (req, res) => {
+    const { address } = req.params;
+
+    try {
+        const balanceWei = await provider.getBalance(address);
+        const balanceEth = ethers.utils.formatEther(balanceWei);
+
+        res.json({
+            code: 200,
+            message: "Hãy kiểm tra số dư của bạn !!",
+            result: {
+                address,
+                balance: `${balanceEth} ETH`,
+            },
+        });
+    } catch (error) {
+        res.status(500).json({
+            code: 500,
+            message: "Không thể lấy số dư !!",
+            result: {
+                details: error.message,
+            },
         });
     }
 });
