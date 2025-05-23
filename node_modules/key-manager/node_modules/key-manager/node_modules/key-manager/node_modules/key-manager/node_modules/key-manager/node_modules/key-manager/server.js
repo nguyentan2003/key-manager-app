@@ -441,32 +441,57 @@ app.put("/api/update-medical-record/:orderId", async (req, res) => {
             wallet_doctor
         );
 
-        console.log(orderId, newIpfsHash);
-        try {
-            const estimatedGas =
-                await contract1.estimateGas.updateRecordByOrderId(
-                    orderId,
-                    newIpfsHash
-                );
-            const tx = await contract1.updateRecordByOrderId(
-                orderId,
-                newIpfsHash,
-                {
-                    gasLimit: 10000000,
-                }
-            );
-            const receipt = await tx.wait();
-            console.log("Giao dịch thành công:", receipt);
-        } catch (error) {
-            console.error("Lỗi khi gọi contract:", error);
-        }
+        // try {
+        //     const estimatedGas =
+        //         await contract1.estimateGas.updateRecordByOrderId(
+        //             orderId,
+        //             newIpfsHash
+        //         );
+        //     const tx = await contract1.updateRecordByOrderId(
+        //         orderId,
+        //         newIpfsHash,
+        //         {
+        //             gasLimit: 10000000,
+        //         }
+        //     );
+        //     const receipt = await tx.wait();
+        //     console.log("Giao dịch thành công:", receipt);
+        // } catch (error) {
+        //     console.error("Lỗi khi gọi contract:", error);
+        // }
+        const gasEstimate = await contract.estimateGas.updateRecordByOrderId(
+            orderId,
+            newIpfsHash
+        );
+        console.log("gas la : ", gasEstimate);
+        const tx = await contract.updateRecordByOrderId(orderId, newIpfsHash, {
+            gasLimit: 9999999,
+        });
+        const record = await tx.wait();
 
         // B5: Trả kết quả về client
+
         res.json({
             code: 200,
-            message: "Tạo bệnh án thành công",
-            result: {},
+            message: "update theo orderID thành công !!",
+            result: {
+                recordId: record[0].toNumber ? record[0].toNumber() : record[0], // chuyển BigNumber sang number nếu cần
+                patientName: record[1],
+                ipfsHash: record[2],
+                timestamp: record[3].toNumber
+                    ? record[3].toNumber()
+                    : record[3],
+                owner: record[4],
+                doctor: record[5],
+            },
         });
+
+        // // B5: Trả kết quả về client
+        // res.json({
+        //     code: 200,
+        //     message: "Tạo bệnh án thành công",
+        //     result: {},
+        // });
     } catch (error) {
         console.error(error);
         res.status(500).json({
@@ -477,94 +502,6 @@ app.put("/api/update-medical-record/:orderId", async (req, res) => {
             },
         });
     }
-});
-app.put("/api/update-medical-record-test/:orderId", async (req, res) => {
-    const orderId = req.params.orderId;
-    if (orderId == null)
-        return res.status(400).json({
-            code: 400,
-            message: "OrderId not null",
-            data: {},
-        });
-
-    const {
-        patient_address,
-        doctor_address,
-        encrypted_doctor_key,
-        patientName,
-        age,
-        gender,
-        diagnosis,
-        treatment,
-        prescription,
-    } = req.body;
-
-    if (!encrypted_doctor_key || !orderId || !patientName) {
-        return res.status(400).json({
-            code: 400,
-            message: "Thiếu dữ liệu bắt buộc",
-            data: {},
-        });
-    }
-
-    const medicalRecordData = {
-        patientName,
-        age,
-        gender,
-        diagnosis,
-        treatment,
-        prescription,
-    };
-
-    const plainText = JSON.stringify(medicalRecordData);
-    const encryptedText = await encryptKey(plainText);
-
-    const result = await pinata.pinJSONToIPFS({
-        encryptedData: encryptedText,
-    });
-    const newIpfsHash = result.IpfsHash;
-
-    const decryptedPrivateKeyDoctor = await decryptKey(encrypted_doctor_key);
-    const wallet_doctor = new ethers.Wallet(
-        decryptedPrivateKeyDoctor,
-        provider
-    );
-
-    const contract1 = new ethers.Contract(
-        contractAddress,
-        contractABI.abi,
-        wallet_doctor
-    );
-
-    const status = await contract1.callStatic.updateRecordByOrderIdFix(
-        orderId,
-        newIpfsHash
-    );
-
-    const UpdateStatus = [
-        "Success",
-        "OrderIdNotFound",
-        "RecordNotFound",
-        "NotAuthorized",
-        "RecordNotInPatientList",
-    ];
-
-    if (status.toString() !== "0") {
-        return res.status(400).json({
-            code: 400,
-            status: UpdateStatus[status],
-            message: "Không thể cập nhật bệnh án",
-        });
-    }
-
-    // ✅ Bây giờ mới gọi thật
-    const tx = await contract1.updateRecordByOrderIdFix(orderId, newIpfsHash);
-    await tx.wait();
-
-    res.json({
-        code: 200,
-        message: "Cập nhật thành công",
-    });
 });
 
 // 4. Lấy chi tiết bệnh án theo orderId
