@@ -61,6 +61,19 @@ app.post("/api/medical-record", async (req, res) => {
             prescription,
         } = req.body;
 
+        // Bước 1: Kiểm tra orderId đã tồn tại chưa
+        const exists = await contract.existsOrderId(orderId);
+
+        if (exists) {
+            return res.status(400).json({
+                code: 400,
+                message: "Order ID đã tồn tại",
+                data: {},
+            });
+        }
+
+        // Nếu chưa tồn tại => tiếp tục tạo bệnh án
+
         if (
             !patient_address ||
             !doctor_address ||
@@ -386,8 +399,6 @@ app.put("/api/update-medical-record/:orderId", async (req, res) => {
                 data: {},
             });
         const {
-            patient_address,
-            doctor_address,
             encrypted_doctor_key,
             patientName,
             age,
@@ -441,31 +452,15 @@ app.put("/api/update-medical-record/:orderId", async (req, res) => {
             wallet_doctor
         );
 
-        // try {
-        //     const estimatedGas =
-        //         await contract1.estimateGas.updateRecordByOrderId(
-        //             orderId,
-        //             newIpfsHash
-        //         );
-        //     const tx = await contract1.updateRecordByOrderId(
-        //         orderId,
-        //         newIpfsHash,
-        //         {
-        //             gasLimit: 10000000,
-        //         }
-        //     );
-        //     const receipt = await tx.wait();
-        //     console.log("Giao dịch thành công:", receipt);
-        // } catch (error) {
-        //     console.error("Lỗi khi gọi contract:", error);
-        // }
-        const gasEstimate = await contract.estimateGas.updateRecordByOrderId(
-            orderId,
-            newIpfsHash
-        );
-        console.log("gas la : ", gasEstimate);
-        const tx = await contract.updateRecordByOrderId(orderId, newIpfsHash, {
-            gasLimit: 9999999,
+        // const gasEstimate = await contract.estimateGas.updateRecordByOrderId(
+        //     orderId,
+        //     newIpfsHash
+        // );
+        // console.log("gas la : ", gasEstimate);
+        // const test = ethers.BigNumber.from(gasEstimate);
+        console.log(orderId);
+        const tx = await contract1.updateRecordByOrderId(orderId, newIpfsHash, {
+            gasLimit: 999999999999,
         });
         const record = await tx.wait();
 
@@ -474,24 +469,8 @@ app.put("/api/update-medical-record/:orderId", async (req, res) => {
         res.json({
             code: 200,
             message: "update theo orderID thành công !!",
-            result: {
-                recordId: record[0].toNumber ? record[0].toNumber() : record[0], // chuyển BigNumber sang number nếu cần
-                patientName: record[1],
-                ipfsHash: record[2],
-                timestamp: record[3].toNumber
-                    ? record[3].toNumber()
-                    : record[3],
-                owner: record[4],
-                doctor: record[5],
-            },
+            result: {},
         });
-
-        // // B5: Trả kết quả về client
-        // res.json({
-        //     code: 200,
-        //     message: "Tạo bệnh án thành công",
-        //     result: {},
-        // });
     } catch (error) {
         console.error(error);
         res.status(500).json({
@@ -815,8 +794,8 @@ app.post("/create-and-fund-wallet", async (req, res) => {
         const encryptedPrivateKey = await encryptKey(wallet.privateKey);
 
         // Xác định số ETH cần cấp
-        let amount = "0.5";
-        if (role === "doctor") amount = "2";
+        let amount = "1";
+        if (role === "DOCTOR") amount = "5";
 
         // Chuyển ETH từ ví senderWallet sang ví mới tạo
         const tx = await senderWallet.sendTransaction({
