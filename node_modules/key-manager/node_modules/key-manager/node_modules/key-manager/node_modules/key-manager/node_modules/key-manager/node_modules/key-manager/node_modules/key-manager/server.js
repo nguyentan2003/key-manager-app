@@ -43,6 +43,14 @@ const contract = new ethers.Contract(
     wallet_admin
 );
 
+function extractRevertReason(errorMessage) {
+    const match = errorMessage.match(/revert\s+([^\\"]+)/i);
+    if (match && match[1]) {
+        return match[1].trim();
+    }
+    return "Unknown error";
+}
+
 // 1. Tạo bệnh án mới
 
 app.post("/api/medical-record", async (req, res) => {
@@ -148,7 +156,7 @@ app.post("/api/medical-record", async (req, res) => {
             code: 401,
             message: "Doctor not Authorize",
             result: {
-                error: error.message || "Lỗi server",
+                error: extractRevertReason(error.message) || "Lỗi server",
             },
         });
     }
@@ -191,7 +199,7 @@ app.get("/api/decrypt-ipfs/:hash", async (req, res) => {
             code: 500,
             message: "Không thể giải mã dữ liệu từ IPFS",
             result: {
-                error: error.message,
+                error: extractRevertReason(error.message),
             },
         });
     }
@@ -248,7 +256,7 @@ app.get("/api/data-raw/get-from-order-table-id/:orderId", async (req, res) => {
             code: 500,
             message: "Server không thể xử lí hãy kiểm tra lại",
             result: {
-                error: error.message || "Lỗi server",
+                error: extractRevertReason(error.message) || "Lỗi server",
             },
         });
     }
@@ -272,11 +280,135 @@ app.post("/grant/doctor", async (req, res) => {
             code: 500,
             message: "Lỗi khi cấp quyền Doctor !!",
             result: {
-                error: err.message,
+                error: extractRevertReason(err.message),
             },
         });
     }
 });
+
+// Patient Cấp quyền cho bác sĩ tạo bệnh án
+app.post("/patient/grant/permission", async (req, res) => {
+    const { encrypted_patient_key, doctorAddress } = req.body;
+
+    if (!encrypted_patient_key || !doctorAddress) {
+        return res.status(400).json({
+            code: 400,
+            message: "Thiếu dữ liệu bắt buộc",
+            data: {},
+        });
+    }
+    // giải mã key của patient
+    const decryptedPrivateKeyPatient = await decryptKey(encrypted_patient_key);
+    const wallet_patient = new ethers.Wallet(
+        decryptedPrivateKeyPatient,
+        provider
+    );
+
+    // B4: Gọi smart contract để lưu IPFS hash
+    const contract1 = new ethers.Contract(
+        contractAddress,
+        contractABI.abi,
+        wallet_patient
+    );
+
+    try {
+        // Gọi contract với signer là bệnh nhân
+        const tx = await contract1.grantPermissionToDoctor(doctorAddress);
+        await tx.wait();
+
+        res.json({
+            code: 200,
+            message: `Patient granted permission to Doctor: ${doctorAddress}`,
+            result: {},
+        });
+    } catch (err) {
+        res.status(500).json({
+            code: 500,
+            message: "Lỗi khi bệnh nhân cấp quyền cho bác sĩ!",
+            result: {
+                error: extractRevertReason(err.message),
+            },
+        });
+    }
+});
+
+// xem patient đã cấp quyền cho doctor nào
+app.get("/check-patient-grant/:patientAddress", async (req, res) => {
+    const patientAddress = req.params.patientAddress;
+
+    if (!patientAddress)
+        res.json({
+            code: 404,
+            message: `Thiếu address`,
+            result: {},
+        });
+
+    try {
+        const doctors = await contract.getGrantedDoctorsOfPatient(
+            patientAddress
+        );
+        res.json({
+            code: 200,
+            message: `Lấy danh sách thành công`,
+            result: doctors,
+        });
+    } catch (err) {
+        res.status(500).json({
+            code: 500,
+
+            message: "Lỗi lấy danh sách  !!",
+            result: {
+                error: extractRevertReason(err.message),
+            },
+        });
+    }
+});
+//patient Thu hồi quyền bác sĩ
+app.post("/patient/revoke/permission", async (req, res) => {
+    const { encrypted_patient_key, doctorAddress } = req.body;
+
+    if (!encrypted_patient_key || !doctorAddress) {
+        return res.status(400).json({
+            code: 400,
+            message: "Thiếu dữ liệu bắt buộc",
+            data: {},
+        });
+    }
+    // giải mã key của patient
+    const decryptedPrivateKeyPatient = await decryptKey(encrypted_patient_key);
+    const wallet_patient = new ethers.Wallet(
+        decryptedPrivateKeyPatient,
+        provider
+    );
+
+    // B4: Gọi smart contract để lưu IPFS hash
+    const contract1 = new ethers.Contract(
+        contractAddress,
+        contractABI.abi,
+        wallet_patient
+    );
+
+    try {
+        // Gọi contract với signer là bệnh nhân
+        const tx = await contract1.revokePermissionFromDoctor(doctorAddress);
+        await tx.wait();
+
+        res.json({
+            code: 200,
+            message: `Patient revoked permission from Doctor: ${doctorAddress}`,
+            result: {},
+        });
+    } catch (err) {
+        res.status(500).json({
+            code: 500,
+            message: "Lỗi khi thu hồi quyền bác sĩ!",
+            result: {
+                error: extractRevertReason(err.message),
+            },
+        });
+    }
+});
+
 // thu hồi quyền doctor
 app.post("/revoke/doctor", async (req, res) => {
     const { doctorAddress } = req.body;
@@ -295,7 +427,7 @@ app.post("/revoke/doctor", async (req, res) => {
 
             message: "Lỗi khi thu hồi quyền Doctor !!",
             result: {
-                error: err.message,
+                error: extractRevertReason(err.message),
             },
         });
     }
@@ -318,7 +450,7 @@ app.post("/grant/admin", async (req, res) => {
             code: 500,
             message: "Lỗi khi cấp quyền admin !!",
             result: {
-                error: err.message,
+                error: extractRevertReason(err.message),
             },
         });
     }
@@ -340,7 +472,7 @@ app.post("/check-roles-of", async (req, res) => {
             },
         });
     } catch (err) {
-        console.error(err);
+        // console.error(err);
         res.status(500).json({
             code: 500,
             message: "Lỗi khi gọi checkRolesOf !!",
@@ -383,7 +515,7 @@ app.put("/api/medical-record/:recordId", async (req, res) => {
             code: 400,
             message: "Lỗi khi cập nhật bệnh án !! ",
             result: {
-                error: error.message || "Lỗi server",
+                error: extractRevertReason(error.message) || "Lỗi server",
             },
         });
     }
@@ -730,7 +862,7 @@ app.get("/create-wallet", async (req, res) => {
             code: 500,
             message: "Tạo ví thất bại",
             result: {
-                details: error.message,
+                details: extractRevertReason(error.message),
             },
         });
     }
@@ -764,12 +896,12 @@ app.post("/fund-wallet", async (req, res) => {
             },
         });
     } catch (error) {
-        console.error("Lỗi chuyển ETH:", error);
+        // console.error("Lỗi chuyển ETH:", error);
         res.status(500).json({
             code: 500,
             message: "Chuyển ETH thất bại !!",
             result: {
-                details: error.message,
+                details: extractRevertReason(error.message),
             },
         });
     }
@@ -815,12 +947,12 @@ app.post("/create-and-fund-wallet", async (req, res) => {
             },
         });
     } catch (error) {
-        console.error("Lỗi tạo và chuyển ETH:", error);
+        // console.error("Lỗi tạo và chuyển ETH:", error);
         res.status(500).json({
             code: 500,
             message: "Tạo ví và chuyển ETH thất bại!",
             result: {
-                details: error.message,
+                details: extractRevertReason(error.message),
             },
         });
     }
@@ -847,7 +979,7 @@ app.get("/balance/:address", async (req, res) => {
             code: 500,
             message: "Không thể lấy số dư !!",
             result: {
-                details: error.message,
+                details: extractRevertReason(error.message),
             },
         });
     }
