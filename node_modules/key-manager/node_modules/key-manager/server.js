@@ -62,8 +62,8 @@ app.post("/api/medical-record", async (req, res) => {
             encrypted_doctor_key,
             orderId,
             patientName,
-            age,
-            gender,
+            doctorName,
+            dateTime,
             diagnosis,
             treatment,
             prescription,
@@ -98,9 +98,10 @@ app.post("/api/medical-record", async (req, res) => {
 
         // B1: Tạo object chứa bệnh án
         const medicalRecordData = {
+            orderId,
             patientName,
-            age,
-            gender,
+            doctorName,
+            dateTime,
             diagnosis,
             treatment,
             prescription,
@@ -495,8 +496,13 @@ app.put("/api/medical-record/:recordId", async (req, res) => {
             });
         }
 
+        newData = {
+            orderId,
+            ...newData,
+        };
         const result = await pinata.pinJSONToIPFS(newData);
         const newIpfsHash = result.IpfsHash;
+        console.log(newIpfsHash);
 
         const tx = await contract.updateRecord(recordId, newIpfsHash);
         const receipt = await tx.wait();
@@ -533,8 +539,8 @@ app.put("/api/update-medical-record/:orderId", async (req, res) => {
         const {
             encrypted_doctor_key,
             patientName,
-            age,
-            gender,
+            doctorName,
+            dateTime,
             diagnosis,
             treatment,
             prescription,
@@ -550,9 +556,10 @@ app.put("/api/update-medical-record/:orderId", async (req, res) => {
 
         // B1: Tạo object chứa bệnh án
         const medicalRecordData = {
+            orderId,
             patientName,
-            age,
-            gender,
+            doctorName,
+            dateTime,
             diagnosis,
             treatment,
             prescription,
@@ -696,31 +703,67 @@ app.post("/api/medical-record/patient", async (req, res) => {
             });
         }
 
-        // giải mã key
+        // Giải mã private key
         const decryptedPrivateKeyRaw = await decryptKey(encrypted_key);
         const walletBlockchain = new ethers.Wallet(
             decryptedPrivateKeyRaw,
             provider
         );
 
+        // Kết nối contract
         const contract1 = new ethers.Contract(
             contractAddress,
             contractABI.abi,
             walletBlockchain
         );
 
+        // Lấy tất cả record
         const records = await contract1.getAllRecordsOfPatient(address);
 
-        res.json({
+        let listRecordRaw = [];
+
+        // Duyệt từng record
+        for (const element of records) {
+            try {
+                const url = `https://gateway.pinata.cloud/ipfs/${element.ipfsHash}`;
+
+                // Lấy dữ liệu từ IPFS
+                const ipfsResponse = await axios.get(url);
+                const encryptedData = ipfsResponse.data.encryptedData;
+
+                if (!encryptedData) {
+                    return res.status(400).json({
+                        code: 400,
+                        message:
+                            "Dữ liệu IPFS không hợp lệ hoặc thiếu encryptedData",
+                        result: { error: "Lỗi" },
+                    });
+                }
+
+                // Giải mã AES
+                const decryptedText = await decryptKey(encryptedData);
+                const medicalRecord = JSON.parse(decryptedText);
+
+                listRecordRaw.push(medicalRecord);
+            } catch (error) {
+                console.error(error.message);
+                return res.status(500).json({
+                    code: 500,
+                    message: "Không thể giải mã dữ liệu từ IPFS",
+                    result: { error: "Lỗi khi xử lý record" },
+                });
+            }
+        }
+
+        // Trả về 1 lần duy nhất
+        return res.json({
             code: 200,
             message: "Lấy tất cả bệnh án của 1 bệnh nhân thành công !!",
-            result: {
-                records,
-            },
+            result: listRecordRaw,
         });
     } catch (error) {
         console.error(error);
-        res.status(500).json({
+        return res.status(500).json({
             code: 500,
             message: "Lỗi server khi lấy tất cả bệnh án của 1 bệnh nhân !!",
             result: {},
@@ -755,14 +798,15 @@ app.get("/api/medical-record/creator/:creatorAddress", async (req, res) => {
 //8 API lấy danh sách recordId của bác sĩ
 app.post("/records/doctor", async (req, res) => {
     try {
-        const { address, encrypted_key } = req.body;
-        if (!address || !encrypted_key) {
+        const { address, encrypted_key, dateTime } = req.body;
+        if (!address || !encrypted_key || !dateTime) {
             return res.status(400).json({
                 code: 400,
                 message: "Thiếu dữ liệu bắt buộc",
                 data: {},
             });
         }
+        const yyyymmdd = parseInt(dateTime, 10);
 
         // giải mã key
         const decryptedPrivateKeyRaw = await decryptKey(encrypted_key);
@@ -777,14 +821,50 @@ app.post("/records/doctor", async (req, res) => {
             walletBlockchain
         );
 
-        const records = await contract1.getRecordsCreatedByDoctor(address);
+        const records = await contract1.getRecordsCreatedByDoctorInDay(
+            address,
+            yyyymmdd
+        );
+
+        let listRecordRaw = [];
+
+        // Duyệt từng record
+        for (const element of records) {
+            try {
+                const url = `https://gateway.pinata.cloud/ipfs/${element.ipfsHash}`;
+
+                // Lấy dữ liệu từ IPFS
+                const ipfsResponse = await axios.get(url);
+                const encryptedData = ipfsResponse.data.encryptedData;
+
+                if (!encryptedData) {
+                    return res.status(400).json({
+                        code: 400,
+                        message:
+                            "Dữ liệu IPFS không hợp lệ hoặc thiếu encryptedData",
+                        result: { error: "Lỗi" },
+                    });
+                }
+
+                // Giải mã AES
+                const decryptedText = await decryptKey(encryptedData);
+                const medicalRecord = JSON.parse(decryptedText);
+
+                listRecordRaw.push(medicalRecord);
+            } catch (error) {
+                console.error(error.message);
+                return res.status(500).json({
+                    code: 500,
+                    message: "Không thể giải mã dữ liệu từ IPFS",
+                    result: { error: "Lỗi khi xử lý record" },
+                });
+            }
+        }
 
         res.json({
             code: 200,
             message: "Lấy danh sách recordId của bác sĩ theo địa chỉ !!",
-            result: {
-                records,
-            },
+            result: listRecordRaw,
         });
     } catch (error) {
         console.error(error);
